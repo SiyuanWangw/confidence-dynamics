@@ -1,0 +1,8 @@
+# Core evaluation deps (torch / sglang installed via configure.sh)
+transformers>=4.51
+numpy
+tqdm
+requests
+math_verify
+latex2sympy2_extended
+pytest
