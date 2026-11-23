@@ -38,7 +38,7 @@ Confidence decides which trajectories stay when a filter is used. Dynamics decid
 
 ## Overall accuracy (%)
 
-| Model | Standard | CW | $`C^{T}W`$ | DW | $`D^{T}W`$ |
+| Model | Standard | CW | C<sup>T</sup>W | DW | D<sup>T</sup>W |
 |---|---:|---:|---:|---:|---:|
 | Qwen3-1.7B | 44.84 | 45.99 | 45.91 | 46.66 | **47.88** |
 | Qwen3-8B | 65.05 | 66.04 | 65.99 | 66.73 | **68.11** |
@@ -46,7 +46,7 @@ Confidence decides which trajectories stay when a filter is used. Dynamics decid
 
 Keeping the top 50% by confidence, then voting:
 
-| Model | CF-CW | $`C^{T}\text{F-}C^{T}W`$ | $`\text{CF-}D^{T}W`$ | $`C^{T}\text{F-}D^{T}W`$ |
+| Model | CF-CW | C<sup>T</sup>F-C<sup>T</sup>W | CF-D<sup>T</sup>W | C<sup>T</sup>F-D<sup>T</sup>W |
 |---|---:|---:|---:|---:|
 | Qwen3-1.7B | 48.37 | 48.14 | **49.84** | 49.24 |
 | Qwen3-8B | 68.40 | 68.22 | 68.71 | **69.09** |
