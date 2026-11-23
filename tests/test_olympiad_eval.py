@@ -6,7 +6,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from olympiad_eval import rule_judge  # noqa: E402
+from confdyn.evals.olympiad_eval import rule_judge  # noqa: E402
 
 
 def test_boxed_exact_match():

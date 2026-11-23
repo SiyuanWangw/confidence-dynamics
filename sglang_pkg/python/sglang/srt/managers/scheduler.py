@@ -3933,7 +3933,7 @@ class Scheduler(
                 msg_details += (
                     f", #new_token_ratio: {old_ratio:.4f} -> {new_token_ratio:.4f}"
                 )
-            logger.warning(msg_prefix + msg_details)
+            logger.debug(msg_prefix + msg_details)
 
             for req in retracted_reqs:
                 self._add_request_to_queue(req, is_retracted=True)

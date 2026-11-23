@@ -1,26 +1,19 @@
-# Datasets
+# Datasets for Table 1
 
-Place benchmark JSON / JSONL files here (or pass `--data_path`).
+`python -m confdyn` loads these files from this directory.
 
-Bundled in this checkout when available:
-
-| File | Benchmark | Notes |
-|---|---|---|
-| `hmmt.json` | HMMT 2025 Feb + Nov (60) | Math short answer |
-| `gpqa_diamond.json` | GPQA-Diamond (198) | Multiple choice |
-| `olympiad/test.jsonl` | OlympiadBench-Math subset | Math |
-| `countdown6.jsonl` | Countdown (6 numbers) | Expression → target |
-| `sgpqa200.json` | SuperGPQA 200-question subset | Used for Gemma in the paper |
-| `aime.json` | AIME 2024+2025 (optional smoke) | |
-
-`generate.py` resolves paths as:
-
-1. `datasets/<name>` in this repo  
-2. else `../Soft-Thinking/datasets/<name>` (local dev fallback)
+| File | Benchmark | Size | Task |
+|---|---|---|---|
+| `gpqa_diamond.json` | GPQA-Diamond | 198 | Multiple choice |
+| `hmmt.json` | HMMT 2025 February and November | 60 | Short answer |
+| `aime.json` | AIME 2024 + 2025 + 2026 | 90 | Integer in \([0, 999]\) |
+| `sgpqa200.json` | SuperGPQA hard subset | 200 | 4–10 choices. 110 physics, 70 chemistry, 20 biology; 156 questions have ten choices |
+| `countdown6_all.jsonl` | Countdown6 | 200 | Six numbers, each used once, to reach a target |
 
 Public sources:
 
-- HMMT / MathArena-style releases  
-- [GPQA](https://github.com/idavidrein/gpqa)  
-- [OlympiadBench](https://github.com/OpenBMB/OlympiadBench)  
-- SuperGPQA (select the 200-question PCB-hard subset used in the paper)
+- [GPQA](https://github.com/idavidrein/gpqa)
+- HMMT via the MathArena releases
+- AIME 2024–2026
+- [SuperGPQA](https://github.com/SuperGPQA/SuperGPQA): the 200-question subset in `sgpqa200.json`
+- Countdown6: the 200 filtered use-all-six problems in `countdown6_all.jsonl`

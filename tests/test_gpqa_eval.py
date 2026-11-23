@@ -6,8 +6,8 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from generate import DEFAULT_GPQA_DIAMOND, GPQA_QUERY_TEMPLATE, MCQ_DATASETS, _load_samples, _user_prompt
-from gpqa_eval import extract_choice, extract_json_choice, format_gpqa_question, rule_judge
+from confdyn.generate import DEFAULT_GPQA_DIAMOND, GPQA_QUERY_TEMPLATE, MCQ_DATASETS, _load_samples, _user_prompt
+from confdyn.evals.gpqa_eval import extract_choice, extract_json_choice, format_gpqa_question, rule_judge
 
 _SAMPLE = {
     "prompt": [

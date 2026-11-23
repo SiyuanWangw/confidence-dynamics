@@ -7,7 +7,9 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from aggregation import (  # noqa: E402
+from confdyn.aggregation import (  # noqa: E402
+    answer_selection,
+    best_score_index,
     default_rho,
     evaluate_paper_methods,
     filter_then_majority_acc,
@@ -79,9 +81,64 @@ def test_evaluate_paper_methods_keys():
     assert "vote_acc_tail_c_weighted" in out
     assert "vote_acc_tail_c_filter_20" in out
     assert "vote_acc_tail_c_filter_30" in out
+    assert "passat1_tail_c_filter_30" in out
+    assert "passat1_tail_c_filter_50" in out
     assert "vote_acc_tail_c_filter_50" in out
     assert "vote_acc_joint_dc_weighted" in out
+    assert "vote_acc_joint_dc_weighted_50" in out
+    assert "vote_acc_joint_dc_weighted_60" in out
+    assert out["passat1_joint_50"] is not None
+    assert out["passat1_joint_60"] is not None
     assert out["joint_retained"] >= 1
+
+
+def test_answer_selection_three_rules():
+    # A is one wrong trace with the highest tail ΔC.
+    # B is correct and wins both the count and the ΔC mass.
+    pass_list = [0.0, 1.0, 1.0]
+    keys = ["A", "B", "B"]
+    tail_dc = [3.0, 4.0, 4.0]
+    all_dc = [1.0, 0.2, 0.2]
+    out = answer_selection(pass_list, keys, tail_dc, all_dc)
+    assert out["best_tail_dc_index"] == 1
+    assert out["vote_acc_best_tail_dc"] == 1.0
+    assert out["best_dc_index"] == 0
+    assert out["vote_acc_best_dc"] == 0.0
+    assert out["vote_acc_majority"] == 1.0
+    assert out["tail_dc_weighted_index"] == 1
+    assert out["vote_acc_tail_dc_weighted"] == 1.0
+    assert out["dc_weighted_index"] == 0
+    assert out["vote_acc_dc_weighted"] == 0.0  # 1.0 > 0.2+0.2
+
+    # Highest single tail ΔC is the wrong answer; two weaker correct traces
+    # still win the count. Their summed tail weight still loses to 9.
+    tail_dc = [9.0, 4.0, 4.0]
+    out = answer_selection(pass_list, keys, tail_dc, all_dc)
+    assert out["best_tail_dc_index"] == 0
+    assert out["vote_acc_best_tail_dc"] == 0.0
+    assert out["vote_acc_majority"] == 1.0
+    assert out["vote_acc_tail_dc_weighted"] == 0.0  # 9 > 4+4
+
+    tail_dc = [3.0, 4.0, 4.0]
+    out = answer_selection(pass_list, keys, tail_dc, [0.1, 0.4, 0.4])
+    assert out["vote_acc_tail_dc_weighted"] == 1.0  # 8 > 3
+    assert out["vote_acc_dc_weighted"] == 1.0  # 0.8 > 0.1
+
+
+def test_best_tail_dc_tie_keeps_the_earlier_trace():
+    assert best_score_index([0.5, 0.5, None]) == 0
+    assert best_score_index([None, 0.1, 0.2]) == 2
+
+
+def test_nonpositive_tail_dc_weight_falls_back_to_majority():
+    pass_list = [0.0, 1.0, 1.0]
+    keys = ["A", "B", "B"]
+    out = answer_selection(pass_list, keys, [-1.0, -0.2, 0.0], [-0.5, -0.1, 0.0])
+    assert out["vote_acc_majority"] == 1.0
+    assert out["tail_dc_weighted_index"] == out["majority_index"]
+    assert out["dc_weighted_index"] == out["majority_index"]
+    assert out["vote_acc_tail_dc_weighted"] == 1.0
+    assert out["vote_acc_dc_weighted"] == 1.0
 
 
 def test_family_defaults():

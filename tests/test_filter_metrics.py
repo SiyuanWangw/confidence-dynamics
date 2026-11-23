@@ -9,7 +9,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from filter_metrics import (  # noqa: E402
+from confdyn.filter_metrics import (  # noqa: E402
     avg_or_none,
     avg_select_k,
     confidence_weights,
@@ -20,6 +20,10 @@ from filter_metrics import (  # noqa: E402
     mean_tail_steps,
     split_by_score,
     step_values,
+    step_layer_confidences,
+    step_layer_top_overlap,
+    step_layer_top_vectors,
+    step_sampled_tokens,
     subset_pass1,
     vote_on_subset,
     weighted_majority_vote,
@@ -78,6 +82,18 @@ def test_weighted_vote_acc():
     assert acc == 1.0
 
 
+def test_untruncated_indices():
+    from confdyn.filter_metrics import untruncated_indices
+
+    # length cap, explicit non-stop, and unknown finish under the cap
+    idx = untruncated_indices(
+        [True, False, None, True],
+        [100, 50, 40000, 10],
+        40000,
+    )
+    assert idx == [0, 3]
+
+
 def test_subset_pass1():
     assert math.isclose(subset_pass1([1.0, 0.0, 1.0], [0.2, 0.9, 0.1], 2, False), 1.0)
 
@@ -95,7 +111,7 @@ def test_mean_steps_and_match():
 
 
 def test_switch_select_k():
-    from filter_metrics import avg_select_k, step_match_flags
+    from confdyn.filter_metrics import avg_select_k, step_match_flags
 
     assert step_match_flags([1.0, 0.0, None, 0.9]) == [1, 0, 1]
     rows = [
@@ -109,7 +125,7 @@ def test_switch_select_k():
 
 
 def test_meta_means_switch():
-    import generate as gen
+    import confdyn.generate as gen
 
     meta = {
         "last_mp": [1.0, 1.0],
@@ -150,8 +166,57 @@ def test_step_values_drops_none_and_rounds():
     assert got == [0.123457, -0.5]
 
 
+def test_step_layer_confidences_aligns_to_last_layer():
+    meta = {
+        "last_c": [None, 1.0, 1.2],
+        "layer_c_1": [None, 0.5, 0.7],
+        "layer_c_2": [None, 0.25, None],
+    }
+    assert step_layer_confidences(meta, depth=3) == [
+        [0.25, 0.5, 1.0],
+        [None, 0.7, 1.2],
+    ]
+
+
+def test_step_layer_top_overlap_with_last_layer():
+    meta = {
+        "last_c": [None, 1.0, 1.2],
+        "layer_top_0": [None, [1, 2, 3], [4, 5, 6]],
+        "layer_top_1": [None, [1, 2, 9], [4, 5, 0]],
+        "layer_top_2": [None, [9, 8, 7], [4, 0, 1]],
+    }
+    tops, overlaps = step_layer_top_overlap(meta, depth=3)
+    assert tops == [
+        [[9, 8, 7], [1, 2, 9], [1, 2, 3]],
+        [[4, 0, 1], [4, 5, 0], [4, 5, 6]],
+    ]
+    assert overlaps[0] == [0.0, round(2 / 3, 6), 1.0]
+    assert overlaps[1][0] == round(1 / 3, 6)
+    assert overlaps[1][1] == round(2 / 3, 6)
+    assert overlaps[1][2] == 1.0
+
+
+def test_step_layer_top_vectors_follow_last_c():
+    meta = {
+        "last_c": [None, 1.0],
+        "layer_top_logit_0": [[9.0], [1.5]],
+        "layer_top_logit_1": [[8.0], [0.5]],
+    }
+    assert step_layer_top_vectors(meta, "layer_top_logit_", depth=2) == [
+        [[0.5], [1.5]]
+    ]
+
+
+def test_step_sampled_tokens_follow_last_c():
+    meta = {
+        "last_c": [None, 1.0, 1.2],
+        "sampled_token": [9, 22, 13],
+    }
+    assert step_sampled_tokens(meta) == [22, 13]
+
+
 def test_step_sidecar_pops_lists(tmp_path):
-    import generate as gen
+    import confdyn.generate as gen
 
     payload = {
         "results": [
@@ -165,6 +230,7 @@ def test_step_sidecar_pops_lists(tmp_path):
                         "step_dc_n3": [0.03],
                         "step_dc_n4": [0.04, 0.05],
                         "step_match": [1, 0],
+                        "step_layer_c": [[0.1, 1.0], [0.2, 1.1], [0.3, 1.2]],
                     }
                 ],
             }
@@ -182,5 +248,7 @@ def test_step_sidecar_pops_lists(tmp_path):
     assert rec["step_dc_n3"] == [0.03]
     assert rec["step_dc_n4"] == [0.04, 0.05]
     assert rec["step_match"] == [1, 0]
+    assert rec["step_layer_c"] == [[0.1, 1.0], [0.2, 1.1], [0.3, 1.2]]
     assert "step_c" not in payload["results"][0]["sample_deltas"][0]
+    assert "step_layer_c" not in payload["results"][0]["sample_deltas"][0]
     assert "step_match" not in payload["results"][0]["sample_deltas"][0]

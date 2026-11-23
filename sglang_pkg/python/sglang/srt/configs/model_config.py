@@ -45,6 +45,39 @@ from sglang.utils import is_in_ci
 
 logger = logging.getLogger(__name__)
 
+
+def _sglang_nemotron_h_config(config):
+    """Rebuild a remote Nemotron-H config with SGLang's cache helpers.
+
+    NVIDIA-Nemotron-3-Nano ships ``trust_remote_code`` ``NemotronHConfig``
+    without ``mamba2_cache_params`` or ``get_nemotron_h_config_for_layer``.
+    The hybrid Mamba model reads both. Field aliases in that checkpoint
+    (``n_groups``, ``conv_kernel``, ``expand``, ``attention_head_dim``) are
+    copied onto the names SGLang's config expects.
+    """
+    archs = list(getattr(config, "architectures", None) or [])
+    if not archs or archs[0] != "NemotronHForCausalLM":
+        return config
+    # Do not hasattr() mamba2_cache_params: it is a property and needs
+    # process groups. The class module is enough to tell the two configs apart.
+    if type(config).__module__.startswith("sglang."):
+        return config
+    from sglang.srt.configs.nemotron_h import NemotronHConfig
+
+    data = config.to_dict()
+    if data.get("mamba_n_groups") is None and data.get("n_groups") is not None:
+        data["mamba_n_groups"] = data["n_groups"]
+    if data.get("mamba_d_conv") is None and data.get("conv_kernel") is not None:
+        data["mamba_d_conv"] = data["conv_kernel"]
+    if data.get("mamba_expand") is None and data.get("expand") is not None:
+        data["mamba_expand"] = data["expand"]
+    if data.get("head_dim") is None and data.get("attention_head_dim") is not None:
+        data["head_dim"] = data["attention_head_dim"]
+    rebuilt = NemotronHConfig.from_dict(data)
+    rebuilt.architectures = archs
+    return rebuilt
+
+
 MIMO_V2_MODEL_ARCHS = (
     "MiMoV2ForCausalLM",
     "MiMoV2FlashForCausalLM",
@@ -332,14 +365,16 @@ class ModelConfig:
         # get_config() is cached. ModelConfig mutates hf_config for draft-model
         # remapping and architecture-specific normalization, so each instance
         # must own an isolated copy.
-        self.hf_config = copy.deepcopy(
-            get_config(
-                self.model_path,
-                trust_remote_code=trust_remote_code,
-                revision=revision,
-                model_override_args=self.model_override_args,
-                model_config_parser=model_config_parser,
-                **kwargs,
+        self.hf_config = _sglang_nemotron_h_config(
+            copy.deepcopy(
+                get_config(
+                    self.model_path,
+                    trust_remote_code=trust_remote_code,
+                    revision=revision,
+                    model_override_args=self.model_override_args,
+                    model_config_parser=model_config_parser,
+                    **kwargs,
+                )
             )
         )
         self.hf_text_config = get_hf_text_config(self.hf_config)

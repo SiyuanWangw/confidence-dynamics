@@ -240,10 +240,54 @@ class LogitsProcessorOutput:
     penult_dmp: Optional[torch.Tensor] = None
     penult_dmc: Optional[torch.Tensor] = None
     penult_dc: Optional[torch.Tensor] = None
+    # log softmax probability of the last layer's own top-1, at that layer
+    # and at the penultimate layer. Pre-temperature.
+    top1_logp: Optional[torch.Tensor] = None
+    penult_top1_logp: Optional[torch.Tensor] = None
+    # Length-20 log-probs. Own ranks, then p_{L-1} of layer L's top-20 ids.
+    last_rank_logp: Optional[torch.Tensor] = None
+    penult_rank_logp: Optional[torch.Tensor] = None
+    penult_on_last_logp: Optional[torch.Tensor] = None
     # ΔC = C_last − C_early at n-3 / n-4 (own top-DEEPCONF_K each layer).
     n3_dc: Optional[torch.Tensor] = None
     n4_dc: Optional[torch.Tensor] = None
     penult_match: Optional[torch.Tensor] = None
+    # Per-step DeepConf C at L-1 .. L-9 when OGF_LAYER_C_DEPTH > 1.
+    layer_c_1: Optional[torch.Tensor] = None
+    layer_c_2: Optional[torch.Tensor] = None
+    layer_c_3: Optional[torch.Tensor] = None
+    layer_c_4: Optional[torch.Tensor] = None
+    layer_c_5: Optional[torch.Tensor] = None
+    layer_c_6: Optional[torch.Tensor] = None
+    layer_c_7: Optional[torch.Tensor] = None
+    layer_c_8: Optional[torch.Tensor] = None
+    layer_c_9: Optional[torch.Tensor] = None
+    # Own top-DEEPCONF_K ids. layer_top_0 is the last layer; layer_top_k is L-k.
+    # logit / prob / cos are the same rows. cos is z / (||h|| ||W||).
+    layer_top_0: Optional[torch.Tensor] = None
+    layer_top_1: Optional[torch.Tensor] = None
+    layer_top_2: Optional[torch.Tensor] = None
+    layer_top_3: Optional[torch.Tensor] = None
+    layer_top_4: Optional[torch.Tensor] = None
+    layer_top_5: Optional[torch.Tensor] = None
+    layer_top_logit_0: Optional[torch.Tensor] = None
+    layer_top_logit_1: Optional[torch.Tensor] = None
+    layer_top_logit_2: Optional[torch.Tensor] = None
+    layer_top_logit_3: Optional[torch.Tensor] = None
+    layer_top_logit_4: Optional[torch.Tensor] = None
+    layer_top_logit_5: Optional[torch.Tensor] = None
+    layer_top_prob_0: Optional[torch.Tensor] = None
+    layer_top_prob_1: Optional[torch.Tensor] = None
+    layer_top_prob_2: Optional[torch.Tensor] = None
+    layer_top_prob_3: Optional[torch.Tensor] = None
+    layer_top_prob_4: Optional[torch.Tensor] = None
+    layer_top_prob_5: Optional[torch.Tensor] = None
+    layer_top_cos_0: Optional[torch.Tensor] = None
+    layer_top_cos_1: Optional[torch.Tensor] = None
+    layer_top_cos_2: Optional[torch.Tensor] = None
+    layer_top_cos_3: Optional[torch.Tensor] = None
+    layer_top_cos_4: Optional[torch.Tensor] = None
+    layer_top_cos_5: Optional[torch.Tensor] = None
 
 
 @dataclasses.dataclass

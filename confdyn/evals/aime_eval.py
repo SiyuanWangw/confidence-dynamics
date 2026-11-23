@@ -1,4 +1,9 @@
-"""GSM8K / gsm8k_p2 rule judge, matching Soft-Thinking matheval.GSM8KEvaluator."""
+"""AIME integer rule judge.
+
+AIME answers are integers in 0..999. This matches overgen-filter's
+``gsm8k_eval`` (Soft-Thinking ``GSM8KEvaluator``): extract the last boxed
+span, then ``math_verify``.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,7 @@ import re
 
 from math_verify import ExprExtractionConfig, parse, verify
 
-from countdown_eval import strip_string
+from confdyn.evals.countdown_eval import strip_string
 
 
 def extract_answer(pred_str: str, use_last_number: bool = True) -> str:

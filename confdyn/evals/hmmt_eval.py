@@ -7,6 +7,6 @@ integer extractor.
 
 from __future__ import annotations
 
-from olympiad_eval import rule_judge
+from confdyn.evals.olympiad_eval import rule_judge
 
 __all__ = ["rule_judge"]

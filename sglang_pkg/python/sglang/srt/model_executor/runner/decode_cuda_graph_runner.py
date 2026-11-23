@@ -1229,6 +1229,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                 )
                 for capture_hook in self.model_runner.capture_tail_hooks:
                     capture_hook(self, out, forward_batch, num_tokens)
+                # Last op in the capture. The clone stays a graph output, so
+                # later replay kernels cannot reuse its storage.
+                from sglang.srt.layers.layer_margins import snapshot_owned_margin_tensors
+
+                snapshot_owned_margin_tensors(out)
                 return out
 
             self.deepep_adapter.capture(is_extend_in_batch=False)
@@ -1531,6 +1536,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     hidden_last=out.hidden_states,
                     n=self.raw_num_token,
                 )
+            from sglang.srt.layers.layer_margins import snapshot_owned_margin_tensors
+
+            # Replay has returned the pool buffer. Copy it before sampling or
+            # the next replay overwrites those addresses.
+            snapshot_owned_margin_tensors(out)
             return out
         else:
             assert isinstance(output, PPProxyTensors)

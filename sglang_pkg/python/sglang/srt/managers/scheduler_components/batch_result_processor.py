@@ -16,7 +16,13 @@ import torch
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
-from sglang.srt.layers.layer_margins import MARGIN_TENSOR_KEYS
+from sglang.srt.layers.layer_margins import (
+    MARGIN_ID_KEYS,
+    MARGIN_RANK_LOGP_KEYS,
+    MARGIN_TENSOR_KEYS,
+    MARGIN_TOP_STAT_KEYS,
+    layer_dump_table,
+)
 from sglang.srt.managers.schedule_batch import (
     FINISH_ABORT,
     FINISH_MATCHED_TOKEN,
@@ -218,6 +224,104 @@ class SchedulerBatchResultProcessor:
             else:
                 val = float(val)
             req.customized_info[key].append(round(val, 6))
+        # Keep the decoded id next to last_c even when OGF_LAYER_TOPK is off.
+        self._maybe_collect_sampled_token(i, req, logits_output)
+        self._maybe_collect_rank_logps(i, req, logits_output)
+        self._maybe_collect_layer_top_ids(i, req, logits_output)
+
+    def _maybe_collect_sampled_token(
+        self,
+        i: int,
+        req: Req,
+        logits_output: LogitsProcessorOutput,
+    ):
+        """Append the accepted token id once per decode step that has last_c."""
+        last_c = getattr(logits_output, "last_c", None)
+        if last_c is None or (hasattr(last_c, "shape") and i >= int(last_c.shape[0])):
+            return
+        if req.customized_info is None:
+            req.customized_info = {}
+        # The sampled id is already in output_ids: decode extends it before
+        # this collector runs. Non-spec accepts one token per forward; if
+        # several were accepted, keep the last.
+        sampled = None
+        if req.output_ids:
+            tok = req.output_ids[-1]
+            if isinstance(tok, (list, tuple)):
+                tok = tok[-1] if tok else None
+            if tok is not None:
+                sampled = int(tok)
+        if "sampled_token" not in req.customized_info:
+            req.customized_info["sampled_token"] = []
+        req.customized_info["sampled_token"].append(sampled)
+
+    def _maybe_collect_rank_logps(
+        self,
+        i: int,
+        req: Req,
+        logits_output: LogitsProcessorOutput,
+    ):
+        """Append the length-20 rank log-probs once per step that has last_c."""
+        last_c = getattr(logits_output, "last_c", None)
+        if last_c is None or (hasattr(last_c, "shape") and i >= int(last_c.shape[0])):
+            return
+        if not any(getattr(logits_output, key, None) is not None for key in MARGIN_RANK_LOGP_KEYS):
+            return
+        if req.customized_info is None:
+            req.customized_info = {}
+        for key in MARGIN_RANK_LOGP_KEYS:
+            t = getattr(logits_output, key, None)
+            if key not in req.customized_info:
+                req.customized_info[key] = []
+            if t is None or (hasattr(t, "shape") and i >= int(t.shape[0])):
+                req.customized_info[key].append(None)
+                continue
+            val = t[i]
+            if isinstance(val, torch.Tensor):
+                val = val.detach().float().cpu().tolist()
+            req.customized_info[key].append([round(float(x), 6) for x in val])
+
+    def _maybe_collect_layer_top_ids(
+        self,
+        i: int,
+        req: Req,
+        logits_output: LogitsProcessorOutput,
+    ):
+        """Append one int-id vector per decode step. Missing layers stay None."""
+        last_c = getattr(logits_output, "last_c", None)
+        if last_c is None or (hasattr(last_c, "shape") and i >= int(last_c.shape[0])):
+            return
+        if not any(getattr(logits_output, key, None) is not None for key in MARGIN_ID_KEYS):
+            return
+        for key in MARGIN_ID_KEYS:
+            t = getattr(logits_output, key, None)
+            if req.customized_info is None:
+                req.customized_info = {}
+            if key not in req.customized_info:
+                req.customized_info[key] = []
+            if t is None or (hasattr(t, "shape") and i >= int(t.shape[0])):
+                req.customized_info[key].append(None)
+                continue
+            val = t[i]
+            if isinstance(val, torch.Tensor):
+                val = [int(x) for x in val.detach().to(dtype=torch.int64).cpu().tolist()]
+            else:
+                val = [int(x) for x in val]
+            req.customized_info[key].append(val)
+        stat_keys = MARGIN_TOP_STAT_KEYS
+        if layer_dump_table():
+            stat_keys = tuple(key for key in MARGIN_TOP_STAT_KEYS if "logit" not in key)
+        for key in stat_keys:
+            t = getattr(logits_output, key, None)
+            if key not in req.customized_info:
+                req.customized_info[key] = []
+            if t is None or (hasattr(t, "shape") and i >= int(t.shape[0])):
+                req.customized_info[key].append(None)
+                continue
+            val = t[i]
+            if isinstance(val, torch.Tensor):
+                val = val.detach().float().cpu().tolist()
+            req.customized_info[key].append([float(f"{float(x):.6e}") for x in val])
 
     @staticmethod
     def _visible_output_len(req: Req) -> int:

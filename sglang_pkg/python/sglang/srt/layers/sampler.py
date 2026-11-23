@@ -1,4 +1,5 @@
 import logging
+import os
 from functools import partial
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -65,6 +66,114 @@ if is_npu():
     import torch_npu
 
 logger = logging.getLogger(__name__)
+_DC_TEMP_LOGGED = False
+_C_TEMP_LOGGED = False
+
+
+def _apply_dc_temperature(logits_output, sampling_info) -> None:
+    """Per-step temperature from penult ΔC (pre-temperature logits).
+
+    OGF_DC_TEMP=1. Comparison is OGF_DC_TEMP_CMP (default ``gt``):
+    if ΔC > OGF_DC_TEMP_THRESH, sample at OGF_DC_TEMP_LOW, else HIGH.
+    ``lt`` flips the test (ΔC < threshold uses LOW). Prefill has no ΔC
+    and keeps the request temperature. LOW is the temperature on a match;
+    it may be higher than HIGH.
+    """
+    global _DC_TEMP_LOGGED
+    raw = os.getenv("OGF_DC_TEMP", "0").strip().lower()
+    if raw not in ("1", "true", "yes"):
+        return
+    dc = getattr(logits_output, "penult_dc", None)
+    temps = getattr(sampling_info, "temperatures", None)
+    if dc is None or temps is None or temps.numel() == 0:
+        return
+    try:
+        hi = float(os.getenv("OGF_DC_TEMP_HIGH", "1.0"))
+        lo = float(os.getenv("OGF_DC_TEMP_LOW", "0.8"))
+        thr = float(os.getenv("OGF_DC_TEMP_THRESH", "1.0"))
+    except ValueError:
+        return
+    cmp = os.getenv("OGF_DC_TEMP_CMP", "gt").strip().lower()
+    dc_col = dc.reshape(-1, 1).to(device=temps.device, dtype=temps.dtype)
+    n = int(temps.shape[0])
+    m = min(int(dc_col.shape[0]), n)
+    if m <= 0:
+        return
+    if cmp in ("lt", "<"):
+        mask = dc_col[:m] < thr
+        op = "<"
+    elif cmp in ("gt", ">"):
+        mask = dc_col[:m] > thr
+        op = ">"
+    else:
+        return
+    chosen = torch.where(
+        mask,
+        temps.new_full((m, 1), lo),
+        temps.new_full((m, 1), hi),
+    )
+    temps[:m].copy_(chosen)
+    if not _DC_TEMP_LOGGED:
+        _DC_TEMP_LOGGED = True
+        logger.warning(
+            "OGF_DC_TEMP on: ΔC%s%s -> T=%s else T=%s",
+            op,
+            thr,
+            lo,
+            hi,
+        )
+
+
+def _apply_c_temperature(logits_output, sampling_info) -> None:
+    """Per-step temperature from final-layer C (pre-temperature top-k logp).
+
+    OGF_C_TEMP=1. If C > OGF_C_TEMP_THRESH, sample at OGF_C_TEMP_LOW, else
+    OGF_C_TEMP_HIGH. ``lt`` flips the test. Prefill has no C and keeps the
+    request temperature. LOW is the temperature on a match.
+    """
+    global _C_TEMP_LOGGED
+    raw = os.getenv("OGF_C_TEMP", "0").strip().lower()
+    if raw not in ("1", "true", "yes"):
+        return
+    conf = getattr(logits_output, "last_c", None)
+    temps = getattr(sampling_info, "temperatures", None)
+    if conf is None or temps is None or temps.numel() == 0:
+        return
+    try:
+        hi = float(os.getenv("OGF_C_TEMP_HIGH", "1.0"))
+        lo = float(os.getenv("OGF_C_TEMP_LOW", "1.1"))
+        thr = float(os.getenv("OGF_C_TEMP_THRESH", "16.21"))
+    except ValueError:
+        return
+    cmp = os.getenv("OGF_C_TEMP_CMP", "gt").strip().lower()
+    conf_col = conf.reshape(-1, 1).to(device=temps.device, dtype=temps.dtype)
+    n = int(temps.shape[0])
+    m = min(int(conf_col.shape[0]), n)
+    if m <= 0:
+        return
+    if cmp in ("lt", "<"):
+        mask = conf_col[:m] < thr
+        op = "<"
+    elif cmp in ("gt", ">"):
+        mask = conf_col[:m] > thr
+        op = ">"
+    else:
+        return
+    chosen = torch.where(
+        mask,
+        temps.new_full((m, 1), lo),
+        temps.new_full((m, 1), hi),
+    )
+    temps[:m].copy_(chosen)
+    if not _C_TEMP_LOGGED:
+        _C_TEMP_LOGGED = True
+        logger.warning(
+            "OGF_C_TEMP on: C%s%s -> T=%s else T=%s",
+            op,
+            thr,
+            lo,
+            hi,
+        )
 
 SYNC_TOKEN_IDS_ACROSS_TP = get_bool_env_var("SYNC_TOKEN_IDS_ACROSS_TP")
 SGLANG_RETURN_ORIGINAL_LOGPROB = get_bool_env_var("SGLANG_RETURN_ORIGINAL_LOGPROB")
@@ -171,6 +280,8 @@ class Sampler(nn.Module):
                     logits, dim=-1
                 )
         else:
+            _apply_dc_temperature(logits_output, sampling_info)
+            _apply_c_temperature(logits_output, sampling_info)
             simple_sampling_case = (
                 not sampling_info.need_top_p_sampling
                 and not sampling_info.need_top_k_sampling

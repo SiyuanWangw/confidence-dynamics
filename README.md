@@ -1,147 +1,114 @@
 # Confidence Dynamics for Test-Time Reasoning
 
-Training-free test-time aggregation that jointly filters reasoning trajectories
-by **tail confidence** \(C\) and **inter-layer confidence dynamics** \(\Delta C\),
-then aggregates with \(\Delta C\)-weighted majority voting.
-
-This repository reproduces the method from:
+Training-free test-time scaling that votes with **inter-layer confidence dynamics**, not only final-layer confidence.
 
 > *Beyond Final Confidence: Leveraging Confidence Dynamics for Test-Time Reasoning*
-> (under review at ICLR 2027) — see [`docs/paper.pdf`](docs/paper.pdf).
+> Siyuan Wang, Xiang Ren, Weiyang Liu.
+> [`docs/paper.pdf`](docs/paper.pdf)
 
-## Method (Ours)
+![High-confidence reasoning stagnation](docs/motivation.png)
 
-For each problem, sample \(N\) trajectories. For every trajectory \(\tau\):
+A failed trajectory can stay as confident as a correct one while it stops making progress. The extra signal is how much the final layer updates that confidence.
 
-1. **Token confidence** (DeepConf):  
-   \(C_t = -\frac{1}{k}\sum_{j=1}^{k}\log p_t^{(L)}(j)\) with \(k=20\).
-2. **Inter-layer dynamics** (default: penultimate → final):  
-   \(\Delta C_t = C_t^{(L)} - C_t^{(L-1)}\).
-3. Aggregate both over a **tail** window:
-   - **Qwen3\***: last **2048** tokens  
-   - **Gemma\***: last **20%** of the trajectory
-4. **Joint filter** at retention ratio \(\rho\):  
-   \(S_{C,\Delta}^{\rho} = \mathrm{Top}_{\rho}(C) \cap \mathrm{Top}_{\rho}(\Delta C)\)  
-   Defaults: \(\rho=0.60\) (Qwen3), \(\rho=0.50\) (Gemma).
-5. **\(\Delta C\)-weighted vote** over the retained set.
+## Confidence dynamics
 
-## Baselines
+At decode step \(t\), final-layer token confidence follows DeepConf with \(k = 20\):
 
-Evaluated on the **same** trajectory pool:
+\[
+C_t^{(L)} = -\frac{1}{k}\sum_{j=1}^{k}\log p_t^{(L)}(j)
+\]
 
-| Key | Method |
-|---|---|
-| `vote_acc` | Unweighted majority voting over all \(N\) trajectories |
-| `vote_acc_tail_c_weighted` | Tail-confidence **weighted** majority voting |
-| `vote_acc_tail_c_filter_20` | Keep top **20%** by tail \(C\), then unweighted MV |
-| `vote_acc_tail_c_filter_30` | Keep top **30%** by tail \(C\), then unweighted MV |
-| `vote_acc_tail_c_filter_50` | Keep top **50%** by tail \(C\), then unweighted MV |
-| `vote_acc_joint_dc_weighted` | **Ours**: \(C@\rho \cap \Delta C@\rho\) + \(\Delta C\)-weighted MV |
+Inter-layer confidence dynamics is the change from the penultimate layer:
 
-## Repository layout
+\[
+\Delta C_t = C_t^{(L)} - C_t^{(L-1)}
+\]
 
-```
-confidence-dynamics/
-  aggregation.py          # Joint filter + voting (paper methods)
-  filter_metrics.py       # Majority / weighted / top-k helpers
-  generate.py             # Sample N trajectories + evaluate
-  *_eval.py               # Dataset judges (HMMT, GPQA, Olympiad, …)
-  configure.sh            # Install local SGLang + deps
-  run_eval.sh             # Batch evaluation launcher
-  sglang_pkg/             # SGLang v0.5.19 + C/ΔC layer-margin hooks
-  datasets/               # Benchmark files (see datasets/README.md)
-  tests/                  # CPU unit tests
-  docs/paper.pdf          # Reference paper
-```
+A trajectory uses the mean over all generated tokens, or over the last 2,048 tokens (the tail, written \(C^{T}\) and \(\Delta C^{T}\)).
 
-`sglang_pkg/` is a vendored SGLang tree with hooks that expose per-token
-final-layer \(C\) and penultimate–final \(\Delta C\) during decode
-(`srt/layers/layer_margins.py`).
+Voting weights a trajectory by its score. A dynamics pool that contains a negative weight is shifted by its minimum; an all-positive pool is left unchanged. If every weight is still non-positive, the vote falls back to majority:
+
+\[
+w_i = \Delta C(\tau_i) - \min_j \Delta C(\tau_j), \qquad
+\hat{a} = \arg\max_a \sum_i w_i \mathbf{1}[a_i = a]
+\]
+
+Confidence decides which trajectories stay when a filter is used. Dynamics decides how much each retained trajectory counts.
+
+## Overall accuracy (%)
+
+| Model | Standard | CW | \(C^{T}W\) | DW | \(D^{T}W\) |
+|---|---:|---:|---:|---:|---:|
+| Qwen3-1.7B | 44.84 | 45.99 | 45.91 | 46.66 | **47.88** |
+| Qwen3-8B | 65.05 | 66.04 | 65.99 | 66.73 | **68.11** |
+| Nemotron-3-Nano-4B | 51.46 | 51.69 | 51.81 | 52.59 | **53.87** |
+
+Keeping the top 50% by confidence, then voting:
+
+| Model | CF-CW | \(C^{T}\)F-\(C^{T}W\) | CF-\(D^{T}W\) | \(C^{T}\)F-\(D^{T}W\) |
+|---|---:|---:|---:|---:|
+| Qwen3-1.7B | 48.37 | 48.14 | **49.84** | 49.24 |
+| Qwen3-8B | 68.40 | 68.22 | 68.71 | **69.09** |
+| Nemotron-3-Nano-4B | 52.74 | 54.21 | 55.25 | **56.16** |
+
+> Each problem draws \(N = 50\) trajectories; length-capped traces are dropped. Accuracy is the mean over 20 windows of 30 traces from that pool, then the macro-average of GPQA-Diamond, HMMT, AIME, SuperGPQA, and Countdown6. 
 
 ## Setup
 
+`configure.sh` installs PyTorch 2.13 (`TORCH_CUDA=cu129`, or `cu126`) and the vendored SGLang in `sglang_pkg/`.
+
 ```bash
-# Python 3.12 recommended
-conda create -n confdyn python=3.12 -y
+conda create -n confdyn python=3.12 -y --override-channels -c conda-forge
 conda activate confdyn
-
-# Install torch (pick the CUDA index that matches your driver) + editable SGLang
+cd /path/to/confidence-dynamics
 bash configure.sh
-
-python -c "import sglang; print(sglang.__file__, sglang.__version__)"
-# should point at .../confidence-dynamics/sglang_pkg/python/sglang/...
 ```
 
-Environment variables (optional):
+Models go in `MODELS_DIR` (default `../models`): [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B), [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B), [NVIDIA-Nemotron-3-Nano-4B-BF16](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16). Benchmarks are in [`datasets/`](datasets/README.md).
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `OGF_LAYER_MARGINS` | `1` | Compute \(C\) / \(\Delta C\) during decode |
-| `DEEPCONF_K` | `20` | Top-\(k\) for DeepConf confidence |
-| `LOCAL_TAIL_WINDOW` | `2048` | Fixed tail length (Qwen) |
-| `DUMP_STEP_STATS` | `1` | Write per-token sidecar `.steps.jsonl` |
-
-## Quick start
+## Run
 
 ```bash
-# CPU tests (no GPU)
-python -m pytest -q tests/test_aggregation.py tests/test_filter_metrics.py
-
-# Smoke eval (place model weights under MODELS_DIR)
-python generate.py \
-  --model_path /path/to/Qwen3-1.7B \
-  --dataset hmmt --end_idx 4 --num_samples 4 \
-  --joint_rho 0.6 \
-  --max_new_tokens 2048 \
-  --dump_json results/hmmt_smoke.json
+CUDA_VISIBLE_DEVICES=0,1 TP_SIZE=1 DP_SIZE=2 \
+  MODELS_DIR=/path/to/models \
+  MODELS="Qwen3-1.7B Qwen3-8B NVIDIA-Nemotron-3-Nano-4B-BF16" \
+  DATASETS="gpqa_diamond hmmt aime sgpqa200 countdown6all" \
+  bash scripts/run_main_table.sh
 ```
 
-Batch runs:
+Dumps land in `results/<dataset>_n1000/n50_<model>_t<T>_k<K>_p0.95_mt<max_tokens>.json`. The script then scores them. `SCORE=0` writes dumps only.
+
+**Decoding hyperparameters:** Top-\(p\) is 0.95 and the repetition penalty is 1; Qwen3 uses temperature 0.6, top-\(k\) 20, and presence penalty 1.5, except Countdown6 at temperature 1.0; Nemotron uses temperature 1.0, top-\(k\) off, and presence penalty 0; HMMT and AIME allow 40,000 new tokens; the other three benchmarks allow 32,768.
+
+## Aggregate
 
 ```bash
-# Qwen3 defaults: T=0.6 top_k=20, tail=2048, ρ=0.6
-MODELS=Qwen3-8B DATASETS="hmmt gpqa_diamond olympiad countdown6" \
-  NUM_SAMPLES=10 bash run_eval.sh
-
-# Gemma4 defaults: T=1.0 top_k=64, tail=20%, ρ=0.5
-MODELS=gemma-4-12B FAMILY=gemma4 DATASETS="hmmt gpqa_diamond olympiad sgpqa200" \
-  NUM_SAMPLES=10 bash run_eval.sh
+python scripts/score_main_table.py \
+  --models Qwen3-1.7B Qwen3-8B Nemotron-3-Nano-4B \
+  --datasets gpqa_diamond hmmt aime sgpqa200 countdown6all
 ```
 
-Paper decoding settings (Appendix D.2):
-
-| Model | Dataset | T | top-k | top-p | max tokens |
-|---|---|---|---|---|---|
-| Qwen3-1.7B / 8B | HMMT | 0.6 | 20 | 0.95 | 40,000 |
-| Qwen3-1.7B / 8B | GPQA / Olympiad | 0.6 | 20 | 0.95 | 32,768 |
-| Qwen3-1.7B / 8B | Countdown | 1.0 | 20 | 0.95 | 32,768 |
-| Gemma4-12B | HMMT | 1.0 | 64 | 0.95 | 40,000 |
-| Gemma4-12B | others | 1.0 | 64 | 0.95 | 32,768 |
-
-Truncated trajectories (hit max length) are excluded before aggregation, matching the paper.
-
-## Offline re-aggregation
-
-If you already have dumps with `paper_tail_c_list` / `paper_tail_dc_list`
-(or `mean_tail_*_list`), you can recompute votes without regenerating:
-
-```bash
-python scripts/reaggregate.py results/hmmt_n10.json --rho 0.5
-```
+Standard is majority vote. CW and \(C^{T}W\) weight by global or tail confidence. DW and \(D^{T}W\) weight by global or tail \(\Delta C\), using the shift above. Top 80% and top 50% first keep \(\lceil \rho N \rceil\) traces (at least one) by global or tail confidence, then weight that subset by the same confidence, or by tail \(\Delta C\). Ties keep the earliest trajectory.
 
 ## Citation
 
 ```bibtex
-@inproceedings{confidencedynamics2027,
-  title     = {Beyond Final Confidence: Leveraging Confidence Dynamics for Test-Time Reasoning},
-  author    = {Anonymous},
-  booktitle = {ICLR},
-  year      = {2027},
-  note      = {Under review}
+@article{wang2026confidence,
+  title   = {Beyond Final Confidence: Leveraging Confidence Dynamics for Test-Time Reasoning},
+  author  = {Wang, Siyuan and Ren, Xiang and Liu, Weiyang},
+  year    = {2026}
+}
+```
+
+```bibtex
+@article{fu2025deep,
+  title   = {Deep Think with Confidence},
+  author  = {Fu, Yichao and Wang, Xuewei and Tian, Yuandong and Zhao, Jiawei},
+  journal = {arXiv preprint arXiv:2508.15260},
+  year    = {2025}
 }
 ```
 
 ## License
 
-- Project code: [MIT](LICENSE)
-- `sglang_pkg/`: [Apache-2.0](sglang_pkg/LICENSE) (SGLang)
+Project code is [MIT](LICENSE). `sglang_pkg/` is [Apache-2.0](sglang_pkg/LICENSE).

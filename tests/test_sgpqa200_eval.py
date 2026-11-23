@@ -7,7 +7,7 @@ from collections import Counter
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from generate import (
+from confdyn.generate import (
     DEFAULT_SGPQA200,
     GPQA_QUERY_TEMPLATE,
     MCQ_DATASETS,
@@ -16,7 +16,7 @@ from generate import (
     _load_samples,
     _user_prompt,
 )
-from gpqa_eval import choice_letters, extract_choice, format_gpqa_question, rule_judge
+from confdyn.evals.gpqa_eval import choice_letters, extract_choice, format_gpqa_question, rule_judge
 
 
 def test_sgpqa200_is_mcq():

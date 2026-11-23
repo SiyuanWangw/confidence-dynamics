@@ -981,8 +981,6 @@ class Gemma4TextModel(PreTrainedModel):
             dummy = torch.empty(1, int(w.shape[0]), device=w.device, dtype=w.dtype)
             for buf, n_attr in (
                 ("_ogf_penult_h", "_ogf_penult_n"),
-                ("_ogf_n3_h", "_ogf_n3_n"),
-                ("_ogf_n4_h", "_ogf_n4_n"),
                 ("_ogf_last_h", "_ogf_last_n"),
             ):
                 self._ensure_ogf_margin_buf(buf, dummy)
@@ -1123,10 +1121,6 @@ class Gemma4TextModel(PreTrainedModel):
             ):
                 if layer_idx == self.end_layer - 2:
                     self.stash_ogf_penult_early_exit(hidden_states)
-                elif layer_idx == self.end_layer - 3 and layer_idx >= self.start_layer:
-                    self.stash_ogf_n3_early_exit(hidden_states)
-                elif layer_idx == self.end_layer - 4 and layer_idx >= self.start_layer:
-                    self.stash_ogf_n4_early_exit(hidden_states)
 
         if not self.pp_group.is_last_rank:
             # cuda_graph_runner allocates a fixed PP-proxy schema of

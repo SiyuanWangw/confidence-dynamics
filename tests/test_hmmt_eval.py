@@ -6,7 +6,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from generate import (
+from confdyn.generate import (
     DEFAULT_HMMT,
     MATH_QA_DATASETS,
     MATH_QUERY_TEMPLATE,
@@ -15,7 +15,7 @@ from generate import (
     _math_question,
     _user_prompt,
 )
-from hmmt_eval import rule_judge
+from confdyn.evals.hmmt_eval import rule_judge
 
 
 def test_hmmt_is_math_qa():
@@ -32,7 +32,7 @@ def test_merged_hmmt_has_both_contests():
     assert _math_answer(rows[30]) == "3"
 
 
-def test_prompt_matches_aime_template():
+def test_prompt_matches_math_template():
     sample = {
         "question": "Compute $1+1$.",
         "answer": "2",
@@ -44,7 +44,7 @@ def test_prompt_matches_aime_template():
     assert "\\boxed{}" in prompt
 
 
-def test_original_aime_format():
+def test_prompt_list_format():
     q = "Compute the sum of the positive divisors of $9!$ that have units digit $1$."
     sample = {
         "prompt": [{"from": "user", "value": q}],

@@ -7,7 +7,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from generate import (  # noqa: E402
+from confdyn.generate import (  # noqa: E402
     COUNTDOWN_TEMPLATE_GEMMA4,
     FAMILY_SAMPLING,
     GEMMA4_THINK_END,
@@ -118,8 +118,8 @@ def test_strip_think_gemma4():
 
 
 def test_countdown_prompt_drops_qwen_think_tags():
-    sample = {"prompt": "Make 10 with 1 2 3 4 5"}
-    text = _user_prompt("countdown5", sample, "gemma4")
+    sample = {"prompt": "Make 10 with 1 2 3 4 5 6"}
+    text = _user_prompt("countdown6", sample, "gemma4")
     assert "<think>" not in text
     assert "Make 10" in text
     assert "\\boxed" in COUNTDOWN_TEMPLATE_GEMMA4

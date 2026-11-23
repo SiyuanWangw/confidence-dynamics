@@ -7,7 +7,8 @@ from collections import Counter
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from generate import (
+from confdyn.evals import hle_eval
+from confdyn.generate import (
     DEFAULT_HLE300,
     MATH_QA_DATASETS,
     MATH_QUERY_TEMPLATE,
@@ -18,7 +19,6 @@ from generate import (
     _math_question,
     _user_prompt,
 )
-import hle_eval
 
 
 def test_hle300_is_math_qa():
@@ -45,7 +45,7 @@ def test_prompt_matches_math_template():
     assert "\\boxed{}" in prompt
 
 
-def test_int_uses_gsm8k():
+def test_int_uses_numeric_judge():
     sample = {"kind": "int", "final_answer": "12"}
     ok, extracted = _judge_sample("hle300", r"Reasoning. \boxed{12}", sample, True)
     assert ok, extracted
@@ -53,7 +53,7 @@ def test_int_uses_gsm8k():
     assert not ok
 
 
-def test_number_uses_gsm8k():
+def test_number_uses_numeric_judge():
     sample = {"kind": "number", "answer": "0.5"}
     ok, extracted = hle_eval.rule_judge(r"done \boxed{0.5}", sample)
     assert ok, extracted

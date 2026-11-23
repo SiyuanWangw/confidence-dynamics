@@ -1,4 +1,4 @@
-"""OlympiadBench rule judge, matching Soft-Thinking matheval.OLYMPIADEvaluator."""
+"""OlympiadBench rule judge (boxed LaTeX via math_verify)."""
 
 from __future__ import annotations
 

@@ -22,6 +22,31 @@ def local_tail_window(default: int = 2048) -> int:
         return default
 
 
+def untruncated_indices(
+    finished: Sequence,
+    token_counts: Sequence,
+    max_new_tokens: int,
+) -> List[int]:
+    """Indices of traces that finished before the length cap.
+
+    Drop a trace when ``finished`` is False (finish reason is not stop) or when
+    the completion length reached ``max_new_tokens``. Unknown finish with a
+    shorter completion is kept.
+    """
+    n = max(len(finished), len(token_counts))
+    cap = int(max_new_tokens or 0)
+    keep: List[int] = []
+    for i in range(n):
+        fin = finished[i] if i < len(finished) else None
+        tok = token_counts[i] if i < len(token_counts) else None
+        if fin is False:
+            continue
+        if cap > 0 and tok is not None and int(tok) >= cap:
+            continue
+        keep.append(i)
+    return keep
+
+
 def majority_vote(keys: Sequence) -> Tuple[object, int, Counter]:
     """Most common key; first index among ties (stable, matches angular-sampling)."""
     if not keys:
@@ -258,6 +283,179 @@ def step_values(xs: Optional[Sequence], ndigits: int = 6) -> List[float]:
             out.append(round(float(x), ndigits))
         except (TypeError, ValueError):
             continue
+    return out
+
+
+def step_layer_confidences(meta: dict, depth: int = 6) -> List[List[Optional[float]]]:
+    """Per decode step, DeepConf C from the older layer to the last layer.
+
+    Inner order is ``[C_{L-depth+1}, ..., C_{L-1}, C_L]``. A step is kept when
+    its last-layer value is present, matching ``step_values`` on ``last_c``.
+    """
+    last = list(meta.get("last_c") or [])
+    earlier = []
+    for offset in range(max(int(depth), 1) - 1, 0, -1):
+        earlier.append(list(meta.get(f"layer_c_{offset}") or []))
+    series = earlier + [last]
+    n = max((len(col) for col in series), default=0)
+    rows: List[List[Optional[float]]] = []
+    for i in range(n):
+        last_v = last[i] if i < len(last) else None
+        if last_v is None:
+            continue
+        row: List[Optional[float]] = []
+        for col in series:
+            value = col[i] if i < len(col) else None
+            if value is None:
+                row.append(None)
+                continue
+            try:
+                row.append(round(float(value), 6))
+            except (TypeError, ValueError):
+                row.append(None)
+        rows.append(row)
+    return rows
+
+
+def _id_overlap(earlier, last) -> Optional[float]:
+    if not earlier or not last:
+        return None
+    try:
+        last_ids = [int(x) for x in last]
+        earlier_ids = {int(x) for x in earlier}
+    except (TypeError, ValueError):
+        return None
+    if not last_ids:
+        return None
+    hit = sum(1 for x in last_ids if x in earlier_ids)
+    return hit / len(last_ids)
+
+
+def step_layer_top_overlap(meta: dict, depth: int = 6):
+    """Per decode step, own top-k ids and overlap with the last layer.
+
+    Inner order matches ``step_layer_confidences``: older layer first, last
+    layer last. Overlap of the last column is 1. A step is kept when ``last_c``
+    at that index is present. Overlap is ``|top(layer) ∩ top(L)| / |top(L)|``.
+    """
+    depth = max(int(depth), 1)
+    last_c = list(meta.get("last_c") or [])
+    columns = []
+    for offset in range(depth - 1, -1, -1):
+        columns.append(list(meta.get(f"layer_top_{offset}") or []))
+    n = len(last_c)
+    top_rows: List[List[Optional[List[int]]]] = []
+    overlap_rows: List[List[Optional[float]]] = []
+    for i in range(n):
+        if last_c[i] is None:
+            continue
+        ids_row = []
+        for col in columns:
+            raw = col[i] if i < len(col) else None
+            if not raw:
+                ids_row.append(None)
+                continue
+            try:
+                ids_row.append([int(x) for x in raw])
+            except (TypeError, ValueError):
+                ids_row.append(None)
+        last_ids = ids_row[-1] if ids_row else None
+        overlap = []
+        for ids in ids_row:
+            rate = _id_overlap(ids, last_ids)
+            overlap.append(None if rate is None else round(rate, 6))
+        overlap_rows.append(overlap)
+        top_rows.append(ids_row)
+    return top_rows, overlap_rows
+
+
+def step_layer_top_vectors(meta: dict, prefix: str, depth: int = 6):
+    """Per-step vectors aligned with ``step_layer_top_overlap``.
+
+    ``prefix`` is ``layer_top_logit_``, ``layer_top_prob_``, or ``layer_top_cos_``.
+    Column order is older layer first, last layer last. A step is kept when
+    ``last_c`` at that index is present.
+    """
+    depth = max(int(depth), 1)
+    last_c = list(meta.get("last_c") or [])
+    columns = []
+    for offset in range(depth - 1, -1, -1):
+        columns.append(list(meta.get(f"{prefix}{offset}") or []))
+    rows: List[List[Optional[List[float]]]] = []
+    for i, c in enumerate(last_c):
+        if c is None:
+            continue
+        row: List[Optional[List[float]]] = []
+        for col in columns:
+            raw = col[i] if i < len(col) else None
+            if not raw:
+                row.append(None)
+                continue
+            try:
+                row.append([float(x) for x in raw])
+            except (TypeError, ValueError):
+                row.append(None)
+        rows.append(row)
+    return rows
+
+
+def step_rank_logps(meta: dict, key: str) -> List[Optional[List[float]]]:
+    """Length-20 log-probs aligned with ``step_c``.
+
+    ``key`` is ``last_rank_logp``, ``penult_rank_logp``, or
+    ``penult_on_last_logp``. Steps whose ``last_c`` entry is None are dropped.
+    """
+    last_c = list(meta.get("last_c") or [])
+    column = list(meta.get(key) or [])
+    out: List[Optional[List[float]]] = []
+    for i, c in enumerate(last_c):
+        if c is None:
+            continue
+        raw = column[i] if i < len(column) else None
+        if not raw:
+            out.append(None)
+            continue
+        try:
+            out.append([float(x) for x in raw])
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
+def step_sampled_tokens(meta: dict) -> List[Optional[int]]:
+    """Sampled token id aligned with ``step_c`` / ``step_dc``.
+
+    ``sampled_token`` is appended once per decode step that has ``last_c``.
+    Steps whose ``last_c`` entry is None are dropped, same as ``step_values``.
+    """
+    last_c = list(meta.get("last_c") or [])
+    sampled = list(meta.get("sampled_token") or [])
+    out: List[Optional[int]] = []
+    for i, c in enumerate(last_c):
+        if c is None:
+            continue
+        raw = sampled[i] if i < len(sampled) else None
+        if raw is None:
+            out.append(None)
+            continue
+        try:
+            out.append(int(raw))
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
+def mean_overlap_columns(rows: Sequence[Sequence[Optional[float]]]) -> List[Optional[float]]:
+    if not rows:
+        return []
+    width = max(len(row) for row in rows)
+    out: List[Optional[float]] = []
+    for j in range(width):
+        vals = []
+        for row in rows:
+            if j < len(row) and row[j] is not None:
+                vals.append(float(row[j]))
+        out.append(sum(vals) / len(vals) if vals else None)
     return out
 
 

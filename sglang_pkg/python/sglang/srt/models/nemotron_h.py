@@ -834,6 +834,143 @@ class NemotronHModel(nn.Module):
         else:
             self.norm_f = PPMissingLayer(return_tuple=True)
         self.layers_to_capture: set[int] = set()
+        # Layer-margin buffers. CUDA-graph replay reuses these.
+        self._ogf_penult_h = None
+        self._ogf_penult_n = 0
+        self._ogf_early_r = None
+        self._ogf_last_h = None
+        self._ogf_last_n = 0
+
+    def _ensure_ogf_margin_buf(self, attr: str, hidden_states: torch.Tensor) -> None:
+        n, d = int(hidden_states.shape[0]), int(hidden_states.shape[-1])
+        cap = max(n, 512)
+        buf = getattr(self, attr, None)
+        if buf is None or buf.shape[-1] != d or buf.shape[0] < cap:
+            setattr(
+                self,
+                attr,
+                torch.empty(
+                    (cap, d), device=hidden_states.device, dtype=hidden_states.dtype
+                ),
+            )
+
+    def stash_ogf_early_exit(
+        self, hidden_states, residual, buf_attr: str, n_attr: str
+    ) -> None:
+        """Final-norm a clone of the post-layer stream. Live tensors stay intact.
+
+        Fused RMSNorm is in-place, so the probe must not share storage with the
+        residual that the next layer still reads.
+        """
+        from sglang.srt.layers.layer_margins import layer_margins_enabled
+
+        if (
+            not layer_margins_enabled()
+            or hidden_states is None
+            or hidden_states.numel() == 0
+        ):
+            setattr(self, n_attr, 0)
+            return
+        self._ensure_ogf_margin_buf(buf_attr, hidden_states)
+        n = int(hidden_states.shape[0])
+        h = getattr(self, buf_attr)[:n]
+        h.copy_(hidden_states)
+        if residual is None:
+            out = self.norm_f(h)
+            if isinstance(out, tuple):
+                out = out[0]
+            if out is not h and isinstance(out, torch.Tensor):
+                h.copy_(out)
+        else:
+            if self._ogf_early_r is None or self._ogf_early_r.shape != getattr(
+                self, buf_attr
+            ).shape:
+                self._ogf_early_r = torch.empty_like(getattr(self, buf_attr))
+            r = self._ogf_early_r[:n]
+            r.copy_(residual)
+            out = self.norm_f(h, r)
+            if isinstance(out, tuple):
+                out = out[0]
+            if out is not h and isinstance(out, torch.Tensor):
+                h.copy_(out)
+        setattr(self, n_attr, n)
+
+    def stash_ogf_penult_early_exit(self, hidden_states, residual) -> None:
+        self.stash_ogf_early_exit(
+            hidden_states, residual, "_ogf_penult_h", "_ogf_penult_n"
+        )
+
+    def stash_ogf_offset_early_exit(self, hidden_states, residual, offset: int) -> None:
+        self.stash_ogf_early_exit(
+            hidden_states,
+            residual,
+            f"_ogf_c{int(offset)}_h",
+            f"_ogf_c{int(offset)}_n",
+        )
+
+    def stash_ogf_last_hidden(self, hidden_states) -> None:
+        from sglang.srt.layers.layer_margins import layer_margins_enabled
+
+        if (
+            not layer_margins_enabled()
+            or hidden_states is None
+            or hidden_states.numel() == 0
+        ):
+            self._ogf_last_n = 0
+            return
+        self._ensure_ogf_margin_buf("_ogf_last_h", hidden_states)
+        n = int(hidden_states.shape[0])
+        self._ogf_last_h[:n].copy_(hidden_states)
+        self._ogf_last_n = n
+
+    def _ogf_hidden_view(self, buf_attr: str, n_attr: str, n: int | None = None):
+        buf = getattr(self, buf_attr, None)
+        if buf is None:
+            return None
+        py_n = int(getattr(self, n_attr, 0) or 0)
+        take = int(n) if n is not None and int(n) > 0 else py_n
+        if take <= 0:
+            take = int(buf.shape[0])
+        return buf[: min(take, int(buf.shape[0]))]
+
+    def ogf_penult_hidden(self, n: int | None = None):
+        from sglang.srt.layers.layer_margins import layer_dc_enabled
+
+        if not layer_dc_enabled():
+            return None
+        return self._ogf_hidden_view("_ogf_penult_h", "_ogf_penult_n", n)
+
+    def ogf_early_hidden(self, offset: int, n: int | None = None):
+        """Final-normed hidden at layer L-``offset``. Offset 1 is the penultimate layer."""
+        if int(offset) == 1:
+            return self.ogf_penult_hidden(n)
+        return self._ogf_hidden_view(
+            f"_ogf_c{int(offset)}_h", f"_ogf_c{int(offset)}_n", n
+        )
+
+    def ogf_last_hidden(self, n: int | None = None):
+        return self._ogf_hidden_view("_ogf_last_h", "_ogf_last_n", n)
+
+    def prepare_before_cuda_graph_capture(self, model_runner) -> None:
+        del model_runner
+        if not self.pp_group.is_last_rank or isinstance(self.norm_f, PPMissingLayer):
+            return
+        w = self.norm_f.weight
+        dummy = torch.empty(1, int(w.shape[0]), device=w.device, dtype=w.dtype)
+        from sglang.srt.layers.layer_margins import layer_c_depth
+
+        bufs = [
+            ("_ogf_penult_h", "_ogf_penult_n"),
+            ("_ogf_last_h", "_ogf_last_n"),
+        ]
+        for offset in range(2, layer_c_depth()):
+            bufs.append((f"_ogf_c{offset}_h", f"_ogf_c{offset}_n"))
+        for buf, n_attr in bufs:
+            self._ensure_ogf_margin_buf(buf, dummy)
+            setattr(self, n_attr, int(getattr(self, buf).shape[0]))
+        penult = self._ogf_penult_h
+        if self._ogf_early_r is None or self._ogf_early_r.shape != penult.shape:
+            self._ogf_early_r = torch.empty_like(penult)
 
     def forward(
         self,
@@ -855,6 +992,13 @@ class NemotronHModel(nn.Module):
             residual = pp_proxy_tensors["residual"]
 
         aux_hidden_states = []
+        from sglang.srt.layers.layer_margins import layer_c_depth, layer_dc_enabled
+
+        depth = 1
+        want_dc = True
+        if self.pp_group.is_last_rank and forward_batch.forward_mode.is_decode():
+            depth = layer_c_depth()
+            want_dc = layer_dc_enabled()
         for i in range(self.start_layer, self.end_layer):
             if i in self.layers_to_capture:
                 if residual is not None and getattr(
@@ -873,6 +1017,18 @@ class NemotronHModel(nn.Module):
                 residual=residual,
                 forward_batch=forward_batch,
             )
+            # Offset 1 is the penultimate layer (L-1). OGF_LAYER_DC=0 skips it.
+            offset = (self.end_layer - 1) - i
+            if (
+                self.pp_group.is_last_rank
+                and forward_batch.forward_mode.is_decode()
+                and want_dc
+                and (offset == 1 or (depth > 1 and 2 <= offset <= depth - 1))
+            ):
+                if offset == 1:
+                    self.stash_ogf_penult_early_exit(hidden_states, residual)
+                else:
+                    self.stash_ogf_offset_early_exit(hidden_states, residual, offset)
 
         if not self.pp_group.is_last_rank:
             return PPProxyTensors(
@@ -888,6 +1044,8 @@ class NemotronHModel(nn.Module):
                 hidden_states if residual is None else hidden_states + residual
             )
         hidden_states, _ = self.norm_f(hidden_states, residual)
+        if forward_batch.forward_mode.is_decode():
+            self.stash_ogf_last_hidden(hidden_states)
         if aux_hidden_states:
             return hidden_states, aux_hidden_states
         return hidden_states
@@ -1109,15 +1267,26 @@ class NemotronHForCausalLM(nn.Module):
         if self.capture_aux_hidden_states:
             hidden_states, aux_hidden_states = hidden_states
         if self.pp_group.is_last_rank:
-            return self.logits_processor(
+            logits_out = self.logits_processor(
                 input_ids,
                 hidden_states,
                 self.lm_head,
                 forward_batch,
                 aux_hidden_states,
             )
+            from sglang.srt.layers.layer_margins import maybe_attach_layer_margins
+
+            maybe_attach_layer_margins(
+                logits_out, self, forward_batch, hidden_last=hidden_states
+            )
+            return logits_out
         else:
             return hidden_states
+
+    def prepare_before_cuda_graph_capture(self, model_runner) -> None:
+        prepare = getattr(self.model, "prepare_before_cuda_graph_capture", None)
+        if prepare is not None:
+            prepare(model_runner)
 
     def copy_inputs_before_cuda_graphs(self, input_buffers, **kwargs):
         return self.mamba_cache.copy_inputs_before_cuda_graphs(input_buffers, **kwargs)

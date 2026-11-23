@@ -1,9 +1,9 @@
-"""Countdown rule judges.
+"""Countdown rule judge.
 
-countdown6 (Soft-Thinking COUNTDOWN6Evaluator): boxed equation uses exactly 4
-of the 6 numbers, with 2 from nums[:3] and 2 from nums[3:].
+countdown6: boxed equation uses exactly 4 of the 6 numbers, with 2 from
+nums[:3] and 2 from nums[3:].
 
-countdown5: boxed equation uses each of the 5 given numbers exactly once.
+countdown6all: boxed equation uses each of the 6 numbers exactly once.
 """
 
 from __future__ import annotations
@@ -201,20 +201,6 @@ def _eval_expr_and_collect_nums(expr: str) -> tuple[Fraction, list[int]]:
     return _visit(tree), used_nums
 
 
-def verify_use_all_equation(given_num: list[int], target: int, answer_equation: str) -> bool:
-    """Countdown-5: use every given number exactly once; result equals target."""
-    try:
-        expr = _normalize_equation(_extract_equation_text(answer_equation))
-        if not expr:
-            return False
-        result, used_nums = _eval_expr_and_collect_nums(expr)
-        if Counter(used_nums) != Counter(int(x) for x in given_num):
-            return False
-        return result == Fraction(target, 1)
-    except Exception:
-        return False
-
-
 def verify_partial_equation(given_num: list[int], target: int, answer_equation: str) -> bool:
     try:
         expr = _normalize_equation(_extract_equation_text(answer_equation))
@@ -242,6 +228,20 @@ def verify_partial_equation(given_num: list[int], target: int, answer_equation: 
         return False
 
 
+def verify_use_all_equation(given_num: list[int], target: int, answer_equation: str) -> bool:
+    """Use every given number exactly once; the expression equals target."""
+    try:
+        expr = _normalize_equation(_extract_equation_text(answer_equation))
+        if not expr:
+            return False
+        result, used_nums = _eval_expr_and_collect_nums(expr)
+        if Counter(used_nums) != Counter(int(x) for x in given_num):
+            return False
+        return result == Fraction(target, 1)
+    except Exception:
+        return False
+
+
 def rule_judge(
     solution_str: str,
     target: int,
@@ -252,7 +252,7 @@ def rule_judge(
     answer = strip_string(prediction).split("=")[0].strip()
     if len(answer) == 0:
         return False, "No extracted answer"
-    if variant == "countdown5":
+    if variant == "countdown6all":
         ok = verify_use_all_equation(given_num, target, answer)
     else:
         ok = verify_partial_equation(given_num, target, answer)
